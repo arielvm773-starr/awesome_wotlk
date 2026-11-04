@@ -405,6 +405,35 @@ void passiveHighlight(CGGameObject_C* self) {
 }  // namespace
 
 namespace {
+// selfHighlight: keeps the engine's interact outline on the local player's own model
+CGObject_C* getLocalPlayerObject() {
+    guid_t player_guid = object_mgr::getPlayerGuid();
+    if (player_guid == 0) { return nullptr; }
+    return object_mgr::get<CGObject_C>(player_guid, eTypemaskPlayer);
+}
+
+void setSelfHighlight(bool on) {
+    if (!game_ui::isInWorld()) { return; }
+    CGObject_C* player = getLocalPlayerObject();
+    if (player == nullptr) { return; }
+
+    const bool active = (player->highlight_mask_ & CGObject_C::eHighlightMaskInteract) != 0;
+    if (on && !active) {
+        player->showHighlightType(CGObject_C::eHighlightTypeInteract);
+    } else if (!on && active) {
+        player->hideHighlightType(CGObject_C::eHighlightTypeInteract);
+    }
+}
+
+void applySelfHighlight(int enabled) { setSelfHighlight(enabled != 0); }
+
+// the engine drops highlights on model reload, mount, shapeshift etc., so re-assert it each frame
+void updateSelfHighlight() {
+    if (extensions::console::kCvarRegistry->ref<"selfHighlight", int>() != 0) { setSelfHighlight(true); }
+}
+}  // namespace
+
+namespace {
 constexpr int kEnginePortraitRes = 64;
 int portrait_res = kEnginePortraitRes;
 
@@ -613,6 +642,7 @@ void onLeaveWorld() {
 void onUpdate() {
     misc_interaction::interact.updateCandidate();
     misc_interaction::interact.processRequest();
+    updateSelfHighlight();
 }
 }  // namespace
 
@@ -623,6 +653,7 @@ void misc::initialize(hookkit::HookTransaction& tx) {
     cvars.add<int>({.name = "interactionMode", .init = 1, .min{0}, .max{1}});
     cvars.add<int>(
         {.name = "interactionHighlight", .init = 1, .min{0}, .max{1}, .on_change = applyInteractionHighlight});
+    cvars.add<int>({.name = "selfHighlight", .init = 0, .min{0}, .max{1}, .on_change = applySelfHighlight});
     cvars.add<int>({.name = "portraitResolution", .init = 64, .min{64}, .max{2048}, .on_change = applyPortraitRes});
     cvars.add<int>({.name = "objectHighlightMode", .init = 0, .min{0}, .max{2}, .on_change = applyObjHlMode});
     cvars.add<int>({.name = "chatLogSessionKey", .init = 1, .min{0}, .max{1}, .on_change = applyChatLogStamp});
