@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include "D3D.h"
@@ -405,31 +406,149 @@ void passiveHighlight(CGGameObject_C* self) {
 }  // namespace
 
 namespace {
-// selfHighlight: keeps the engine's interact outline on the local player's own model
+// selfHighlight modes: 1 = interact glow, 2 = native target outline, 3 = native object-track outline
 CGObject_C* getLocalPlayerObject() {
     guid_t player_guid = object_mgr::getPlayerGuid();
     if (player_guid == 0) { return nullptr; }
     return object_mgr::get<CGObject_C>(player_guid, eTypemaskPlayer);
 }
 
-void setSelfHighlight(bool on) {
+struct SelfHlStyle {
+    CGObject_C::HighlightType type;
+    uint32_t mask;
+};
+
+constexpr std::array<SelfHlStyle, 3> kSelfHlStyles = {{
+    {CGObject_C::eHighlightTypeInteract, CGObject_C::eHighlightMaskInteract},
+    {CGObject_C::eHighlightTypeLockedTarget, CGObject_C::eHighlightMaskLockedTarget},
+    {CGObject_C::eHighlightTypeObjectTrack, CGObject_C::eHighlightMaskObjectTrack},
+}};
+
+void setSelfHighlight(int mode) {
     if (!game_ui::isInWorld()) { return; }
     CGObject_C* player = getLocalPlayerObject();
     if (player == nullptr) { return; }
 
-    const bool active = (player->highlight_mask_ & CGObject_C::eHighlightMaskInteract) != 0;
-    if (on && !active) {
-        player->showHighlightType(CGObject_C::eHighlightTypeInteract);
-    } else if (!on && active) {
-        player->hideHighlightType(CGObject_C::eHighlightTypeInteract);
+    for (int i = 0; i < static_cast<int>(kSelfHlStyles.size()); ++i) {
+        const auto& style = kSelfHlStyles[i];
+        const bool want = (mode == i + 1);
+        const bool active = (player->highlight_mask_ & style.mask) != 0;
+        if (want && !active) {
+            player->showHighlightType(style.type);
+        } else if (!want && active) {
+            player->hideHighlightType(style.type);
+        }
     }
 }
 
-void applySelfHighlight(int enabled) { setSelfHighlight(enabled != 0); }
+void applySelfHighlight(int mode) { setSelfHighlight(mode); }
+
+// the model the engine tints for highlights (same virtual call showHighlightType uses)
+CM2Model* getHighlightModel(CGObject_C* obj) {
+    using GetModelFn = CM2Model*(__thiscall*)(CGObject_C*);
+    void** vtable = *reinterpret_cast<void***>(obj);
+    return reinterpret_cast<GetModelFn>(vtable[0xD4 / sizeof(void*)])(obj);
+}
+
+// the engine copies this RGB (floats at model+0x18C) into the additive light colour each frame
+void applySelfHighlightColor(CGObject_C* player) {
+    CM2Model* model = getHighlightModel(player);
+    if (model == nullptr) { return; }
+    auto& reg = *extensions::console::kCvarRegistry;
+    const float power = static_cast<float>(reg.ref<"selfHighlightPower", int>()) / 100.0f;
+    float* rgb = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(model) + 0x18C);
+    rgb[0] = static_cast<float>(reg.ref<"selfHighlightR", int>()) / 255.0f * power;
+    rgb[1] = static_cast<float>(reg.ref<"selfHighlightG", int>()) / 255.0f * power;
+    rgb[2] = static_cast<float>(reg.ref<"selfHighlightB", int>()) / 255.0f * power;
+}
 
 // the engine drops highlights on model reload, mount, shapeshift etc., so re-assert it each frame
 void updateSelfHighlight() {
-    if (extensions::console::kCvarRegistry->ref<"selfHighlight", int>() != 0) { setSelfHighlight(true); }
+    const int mode = extensions::console::kCvarRegistry->ref<"selfHighlight", int>();
+    if (mode == 0 || !game_ui::isInWorld()) { return; }
+    setSelfHighlight(mode);
+    if (CGObject_C* player = getLocalPlayerObject()) { applySelfHighlightColor(player); }
+}
+}  // namespace
+
+// Per-unit glow for addons: SetUnitGlow(unit[, r, g, b, power]), ClearUnitGlow(unit), ClearAllUnitGlows().
+// r/g/b are 0..1. Works on any player the client has loaded, including yourself.
+namespace {
+struct UnitGlow {
+    float r, g, b;
+};
+std::unordered_map<guid_t, UnitGlow> unit_glows;
+
+constexpr auto kGlowType = CGObject_C::eHighlightTypeObjectTrack;
+constexpr uint32_t kGlowMask = CGObject_C::eHighlightMaskObjectTrack;
+
+CGObject_C* glowObject(guid_t guid) { return object_mgr::get<CGObject_C>(guid, eTypemaskPlayer); }
+
+void releaseGlow(guid_t guid) {
+    CGObject_C* obj = glowObject(guid);
+    if (obj != nullptr && (obj->highlight_mask_ & kGlowMask) != 0) { obj->hideHighlightType(kGlowType); }
+}
+
+void updateUnitGlows() {
+    if (unit_glows.empty() || !game_ui::isInWorld()) { return; }
+    for (const auto& [guid, glow] : unit_glows) {
+        CGObject_C* obj = glowObject(guid);
+        if (obj == nullptr) { continue; }
+        if ((obj->highlight_mask_ & kGlowMask) == 0) { obj->showHighlightType(kGlowType); }
+        CM2Model* model = getHighlightModel(obj);
+        if (model == nullptr) { continue; }
+        float* rgb = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(model) + 0x18C);
+        rgb[0] = glow.r;
+        rgb[1] = glow.g;
+        rgb[2] = glow.b;
+    }
+}
+
+void clearUnitGlows() {
+    for (const auto& entry : unit_glows) {
+        releaseGlow(entry.first);
+    }
+    unit_glows.clear();
+}
+
+int luaSetUnitGlow(LuaState* l) {
+    if (!lua::isString(l, 1)) { lua::throwError(l, "Usage: SetUnitGlow(unitID [, r, g, b, power])"); }
+    const guid_t guid = object_mgr::string2Guid(lua::checkString(l, 1));
+    if (guid == 0) { return 0; }
+    auto num = [&](int idx, double def) { return lua::isNumber(l, idx) ? lua::toNumber(l, idx) : def; };
+    const float power = static_cast<float>(std::clamp(num(5, 1.0), 0.0, 3.0));
+    unit_glows[guid] = UnitGlow{
+        static_cast<float>(std::clamp(num(2, 1.0), 0.0, 1.0)) * power,
+        static_cast<float>(std::clamp(num(3, 0.55), 0.0, 1.0)) * power,
+        static_cast<float>(std::clamp(num(4, 0.0), 0.0, 1.0)) * power,
+    };
+    return 0;
+}
+
+int luaClearUnitGlow(LuaState* l) {
+    if (!lua::isString(l, 1)) { lua::throwError(l, "Usage: ClearUnitGlow(unitID)"); }
+    const guid_t guid = object_mgr::string2Guid(lua::checkString(l, 1));
+    if (guid == 0) { return 0; }
+    if (unit_glows.erase(guid) != 0) { releaseGlow(guid); }
+    return 0;
+}
+
+int luaClearAllUnitGlows(LuaState*) {
+    clearUnitGlows();
+    return 0;
+}
+
+int luaOpenGlow(LuaState* l) {
+    static constexpr std::array<lua::LuaLReg, 3> kFuncs = {{
+        {.name = "SetUnitGlow", .func = luaSetUnitGlow},
+        {.name = "ClearUnitGlow", .func = luaClearUnitGlow},
+        {.name = "ClearAllUnitGlows", .func = luaClearAllUnitGlows},
+    }};
+    for (const auto& [name, func] : kFuncs) {
+        lua::pushCFunction(l, func);
+        lua::setGlobal(l, name);
+    }
+    return 0;
 }
 }  // namespace
 
@@ -634,6 +753,7 @@ void onEnterWorld() {
 }
 
 void onLeaveWorld() {
+    unit_glows.clear();
     misc_interaction::interact.reset();
     misc_capture_frame::frame_capture.pending = {};
     misc_capture_frame::updateCaptureHooks();
@@ -643,17 +763,23 @@ void onUpdate() {
     misc_interaction::interact.updateCandidate();
     misc_interaction::interact.processRequest();
     updateSelfHighlight();
+    updateUnitGlows();
 }
 }  // namespace
 
 void misc::initialize(hookkit::HookTransaction& tx) {
     auto& cvars = *extensions::console::kCvarRegistry;
+    extensions::console::kLuaLibRegistry->add(luaOpenGlow);
 
     cvars.add<int>({.name = "interactionAngle", .init = 60, .min{15}, .max{160}});
     cvars.add<int>({.name = "interactionMode", .init = 1, .min{0}, .max{1}});
     cvars.add<int>(
         {.name = "interactionHighlight", .init = 1, .min{0}, .max{1}, .on_change = applyInteractionHighlight});
-    cvars.add<int>({.name = "selfHighlight", .init = 0, .min{0}, .max{1}, .on_change = applySelfHighlight});
+    cvars.add<int>({.name = "selfHighlight", .init = 0, .min{0}, .max{3}, .on_change = applySelfHighlight});
+    cvars.add<int>({.name = "selfHighlightR", .init = 255, .min{0}, .max{255}});
+    cvars.add<int>({.name = "selfHighlightG", .init = 140, .min{0}, .max{255}});
+    cvars.add<int>({.name = "selfHighlightB", .init = 0, .min{0}, .max{255}});
+    cvars.add<int>({.name = "selfHighlightPower", .init = 100, .min{0}, .max{300}});
     cvars.add<int>({.name = "portraitResolution", .init = 64, .min{64}, .max{2048}, .on_change = applyPortraitRes});
     cvars.add<int>({.name = "objectHighlightMode", .init = 0, .min{0}, .max{2}, .on_change = applyObjHlMode});
     cvars.add<int>({.name = "chatLogSessionKey", .init = 1, .min{0}, .max{1}, .on_change = applyChatLogStamp});
