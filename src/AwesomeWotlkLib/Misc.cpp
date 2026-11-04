@@ -512,16 +512,18 @@ void clearUnitGlows() {
 }
 
 int luaSetUnitGlow(LuaState* l) {
-    if (!lua::isString(l, 1)) { lua::throwError(l, "Usage: SetUnitGlow(unitID [, r, g, b, power])"); }
+    if (!lua::isString(l, 1)) { lua::throwError(l, "Usage: SetUnitGlow(unitID [, r, g, b, power, solid])"); }
     const guid_t guid = object_mgr::string2Guid(lua::checkString(l, 1));
     if (guid == 0) { return 0; }
     auto num = [&](int idx, double def) { return lua::isNumber(l, idx) ? lua::toNumber(l, idx) : def; };
-    const float power = static_cast<float>(std::clamp(num(5, 1.0), 0.0, 3.0));
-    unit_glows[guid] = UnitGlow{
-        static_cast<float>(std::clamp(num(2, 1.0), 0.0, 1.0)) * power,
-        static_cast<float>(std::clamp(num(3, 0.55), 0.0, 1.0)) * power,
-        static_cast<float>(std::clamp(num(4, 0.0), 0.0, 1.0)) * power,
+    const float power = static_cast<float>(std::clamp(num(5, 1.0), 0.0, 8.0));
+    const float solid = static_cast<float>(std::clamp(num(6, 0.0), 0.0, 1.0));
+    // solid > 0 also subtracts the channels the colour lacks, so the model is dyed instead of only lit
+    auto channel = [&](double c) {
+        const float cf = static_cast<float>(std::clamp(c, 0.0, 1.0));
+        return power * (cf - solid * (1.0f - cf));
     };
+    unit_glows[guid] = UnitGlow{channel(num(2, 1.0)), channel(num(3, 0.55)), channel(num(4, 0.0))};
     return 0;
 }
 
