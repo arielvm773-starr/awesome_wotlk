@@ -143,6 +143,8 @@ void EntryManager::update(CGWorldFrame* wf) {
             // owner_guid_, e->guid is only assigned in flushAdded after this pass
             .clamp = e->hasState(Entry::State::eShouldClamp) &&
                 s.clampFilterPasses(e->ptr->owner_guid_, target_guid, in_combat),
+            .wrap = s.wrap_columns != 0,
+            .band = {s.band_x, s.band_y},
         });
         e->setState(Entry::State::eIsFresh, false);
         const Vec2f vis = e->place(s.freeze_time, scene_time) / e->ptr->CLayoutFrame::scale_;

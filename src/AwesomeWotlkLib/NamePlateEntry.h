@@ -59,6 +59,8 @@ struct MotionParams {
     Vec2f ceil;        // clamp insets from the screen edges
     bool all_edges{};
     bool clamp{};  // eShouldClamp gated by the per-pass filter
+    bool wrap{};   // nameplateWrapColumns: overflow of the vertical stack goes into side columns
+    Vec2f band;    // stacking bands (x, y) used to size the columns
 };
 
 struct alignas(64) Entry {
@@ -139,6 +141,10 @@ struct alignas(64) Entry {
     Vec2f vis() const {
         return ptr->ndc_proj_ + shown_offset;
     }
+
+    // maps the raw stack offset to where the plate is shown, wrapping a tall pile into side columns
+    [[nodiscard]]
+    Vec2f wrapOffset(const Vec2f& raw, float cap_y, const Vec2f& band) const;
 
     [[nodiscard]]
     Vec2f size() const {

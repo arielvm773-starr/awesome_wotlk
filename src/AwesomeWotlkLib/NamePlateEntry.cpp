@@ -73,18 +73,25 @@ void Entry::updVis(const MotionParams& p) {
         return;
     }
     const Vec2f max = size() * p.max_offset;
-    target_offset = Rectf{0.0f, -max.x, max.y, max.x}.clamp(target_offset);
+    if (p.wrap) {
+        // keep the whole pile height, the display position folds it into columns
+        target_offset.x = std::clamp(target_offset.x, -max.x, max.x);
+        target_offset.y = std::max(target_offset.y, 0.0f);
+    } else {
+        target_offset = Rectf{0.0f, -max.x, max.y, max.x}.clamp(target_offset);
+    }
+    const Vec2f goal = p.wrap ? wrapOffset(target_offset, max.y, p.band) : target_offset;
     if (hasState(State::eIsResync)) {
         setState(State::eIsResync, false);
         momentum = Vec2f{};
-        stack_offset = smooth_target = commit_target = target_offset;
+        stack_offset = smooth_target = commit_target = goal;
     }
 
     // the axes only couple through these two
     const bool resting = isAt({});
-    const bool settled = isAt(target_offset);
+    const bool settled = isAt(goal);
     for (size_t i = 0; i < 2; ++i) {
-        const float gap = target_offset[i] - commit_target[i];
+        const float gap = goal[i] - commit_target[i];
         const float want = std::abs(gap) > kEps4f ? (gap > 0.0f ? 1.0f : -1.0f) : 0.0f;
         float& mom = momentum[i];
         if (resting) {
@@ -96,9 +103,9 @@ void Entry::updVis(const MotionParams& p) {
 
         if (!settled) {
             commit_target[i] +=
-                (target_offset[i] - commit_target[i]) * std::clamp(10.0f * std::abs(mom) * p.delta, 0.0f, 1.0f);
+                (goal[i] - commit_target[i]) * std::clamp(10.0f * std::abs(mom) * p.delta, 0.0f, 1.0f);
         } else {
-            commit_target[i] = target_offset[i];
+            commit_target[i] = goal[i];
             mom *= std::pow(0.1f, p.delta * kTunedFps);
         }
 
@@ -124,6 +131,22 @@ void Entry::updVis(const MotionParams& p) {
         }
         shown_offset = lim.clamp(stack_offset);
     }
+}
+
+Vec2f Entry::wrapOffset(const Vec2f& raw, float cap_y, const Vec2f& band) const {
+    const Vec2f dims = size();
+    const float step_y = dims.y * band.y;
+    if (step_y <= kEps4f) { return raw; }
+    // plates that fit under the vertical cap, the rest moves to the next column
+    const int rows = std::max(1, static_cast<int>(std::floor(cap_y / step_y + 0.001f)) + 1);
+    const int idx = static_cast<int>(std::floor(raw.y / step_y + 0.5f));
+    if (idx < rows) { return raw; }
+    const int col = idx / rows;
+    const int ring = (col + 1) / 2;
+    const float side = (col % 2 == 1) ? 1.0f : -1.0f;  // right, left, far right, far left...
+    return Vec2f{
+        raw.x + side * static_cast<float>(ring) * dims.x * band.x,
+        std::max(0.0f, raw.y - static_cast<float>(col * rows) * step_y)};
 }
 
 void Entry::updateFreeze(bool hovered, bool release_now, uint64_t ms, float grace) {

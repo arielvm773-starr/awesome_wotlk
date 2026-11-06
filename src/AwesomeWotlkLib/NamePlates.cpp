@@ -541,6 +541,13 @@ void name_plates::initialize(hookkit::HookTransaction& tx) {
         .max{0.75f},
         .on_change = markDirty
     });
+    cvars.add<int>({
+        .name = "nameplateWrapColumns",
+        .init = 0,
+        .min{0},
+        .max{1},
+        .on_change = markDirty
+    });
     cvars.add<float>({
         .name = "nameplateOcclusionAlpha",
         .init = 1.0f,
