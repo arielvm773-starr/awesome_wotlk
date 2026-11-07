@@ -1,12 +1,19 @@
 #include "NamePlateManager.h"
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
+#include <map>
+#include <numeric>
+#include <tuple>
+#include <vector>
 #include <format>
 #include <utility>
 
 #include "Extensions.h"
 
 #include "include/Game/CGInputControl.h"
+#include "include/Math/Math.h"
 #include "include/ObjectManager/CGUnit_C.h"
 #include "include/ObjectManager/ObjectManager.h"
 #include "include/ObjectManager/ObjectManagerEnums.h"
@@ -127,6 +134,7 @@ void EntryManager::update(CGWorldFrame* wf) {
     }
 
     stack(ms, scene_time, pull_scale);
+    group();
 
     sort(SortPass::eDraw);
     for (Entry* e : entries_) {
@@ -340,6 +348,94 @@ void EntryManager::bindEntry(Entry* e, CGUnit_C* unit) {
     // for occlusion
     e->ptr->setFresh(true);
     e->ptr->setOpaque(false);
+}
+
+void EntryManager::group() {
+    const Settings& s = *kSettings;
+    for (Entry* e : entries_) { e->has_group = false; }
+    if (s.group_radius <= 0.0f || s.stackingMode() == StackingMode::eDisabled) { return; }
+
+    auto& cand = group_scratch_;
+    cand.clear();
+    for (Entry* e : entries_) {
+        if (e->hasState(Entry::State::eShouldStack) && !e->hasState(Entry::State::eIsFresh) &&
+            !e->hasState(Entry::State::eIsFrozen) && !e->isTransparent()) {
+            cand.push_back(e);
+        }
+    }
+    const int n = static_cast<int>(cand.size());
+    if (n < s.group_min) { return; }
+
+    // single linkage: units within the reach of each other end up in the same cluster
+    std::vector<int> parent(n);
+    std::iota(parent.begin(), parent.end(), 0);
+    auto find = [&parent](int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            const Vec2f a = cand[i]->ptr->ndc_proj_;
+            const Vec2f b = cand[j]->ptr->ndc_proj_;
+            const float reach = std::max(cand[i]->size().x, cand[j]->size().x) * s.group_radius;
+            if (std::abs(a.x - b.x) <= reach && std::abs(a.y - b.y) <= reach) { parent[find(i)] = find(j); }
+        }
+    }
+    std::map<int, std::vector<Entry*>> clusters;
+    for (int i = 0; i < n; ++i) { clusters[find(i)].push_back(cand[i]); }
+
+    const Vec2f screen = math::aspectNormal();
+    for (auto& entry : clusters) {
+        auto& members = entry.second;
+        const int count = static_cast<int>(members.size());
+        if (count < s.group_min) { continue; }
+
+        // lowest unit first, ties broken by x and then by plate so the order stays put between frames
+        std::sort(members.begin(), members.end(), [](const Entry* l, const Entry* r) {
+            const Vec2f a = l->ptr->ndc_proj_;
+            const Vec2f b = r->ptr->ndc_proj_;
+            return std::make_tuple(a.y, a.x, reinterpret_cast<uintptr_t>(l)) <
+                std::make_tuple(b.y, b.x, reinterpret_cast<uintptr_t>(r));
+        });
+
+        float cx = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float base_y = members.front()->ptr->ndc_proj_.y;
+        for (const Entry* e : members) {
+            cx += e->ptr->ndc_proj_.x;
+            width += e->size().x;
+            height += e->size().y;
+            base_y = std::min(base_y, e->ptr->ndc_proj_.y);
+        }
+        const float inv = 1.0f / static_cast<float>(count);
+        cx *= inv;
+        width *= inv;
+        height *= inv;
+
+        const float step = height * s.band_y;
+        if (step <= kEps4f) { continue; }
+        // plates per column: limited by the vertical push and by the room left up to the screen top
+        const float room = std::max(0.0f, screen.y - s.clamp_v_offset - base_y - height);
+        const float cap = std::min(height * s.raise_distance, room);
+        const int rows = std::max(1, static_cast<int>(std::floor(cap / step + 0.001f)) + 1);
+
+        int k = 0;
+        for (Entry* e : members) {
+            const int row = k % rows;
+            const int col = k / rows;
+            const int ring = (col + 1) / 2;
+            const float side = (col % 2 == 1) ? 1.0f : -1.0f;  // right, left, far right...
+            e->group_goal = Vec2f{
+                cx + side * static_cast<float>(ring) * width * s.band_x - e->ptr->ndc_proj_.x,
+                base_y + static_cast<float>(row) * step - e->ptr->ndc_proj_.y};
+            e->has_group = true;
+            ++k;
+        }
+    }
 }
 
 void EntryManager::stack(uint64_t ms, float scene_time, float pull_scale) {

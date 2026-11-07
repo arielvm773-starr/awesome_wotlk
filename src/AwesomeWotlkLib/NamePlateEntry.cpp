@@ -82,7 +82,8 @@ void Entry::updVis(const MotionParams& p) {
     }
     // the pile never grows past the top of the screen: the vertical cap is also limited by the room left above the anchor
     const float room_y = std::max(0.0f, math::aspectNormal().y - p.ceil.y - ptr->ndc_proj_.y - size().y);
-    const Vec2f goal = p.wrap ? wrapOffset(target_offset, std::min(max.y, room_y), p.band) : target_offset;
+    Vec2f goal = p.wrap ? wrapOffset(target_offset, std::min(max.y, room_y), p.band) : target_offset;
+    if (has_group) { goal = group_goal; }
     if (hasState(State::eIsResync)) {
         setState(State::eIsResync, false);
         momentum = Vec2f{};

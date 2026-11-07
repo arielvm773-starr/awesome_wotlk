@@ -306,6 +306,9 @@ private:
     // per-unit state from scratch: a new plate, or one the engine moved to another unit since the last pass
     void bindEntry(Entry* e, CGUnit_C* unit);
     void stack(uint64_t ms, float scene_time, float pull_scale);
+    // nameplateGroupRadius: plates whose units are close together are laid out as one ordered pile
+    void group();
+    std::vector<Entry*> group_scratch_;
 
     static void onPlateCreated(CGNamePlateFrameExt* plate);
 

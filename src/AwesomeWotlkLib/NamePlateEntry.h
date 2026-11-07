@@ -99,6 +99,10 @@ struct alignas(64) Entry {
 
     State state = State::eNone;
 
+    // nameplateGroupRadius: where this plate sits inside a cluster pile (offset from ndc_proj_), rebuilt every frame
+    Vec2f group_goal;
+    bool has_group{};
+
     std::array<uint32_t, kMaxPlates / 32> active_collisions{};
 
     [[nodiscard]]
@@ -119,6 +123,7 @@ struct alignas(64) Entry {
         drawn = freeze_pos = slide_from = Vec2f{};
         grace_end = 0;
         slide_time = 0.0f;
+        has_group = false;
         state = State::eIsFresh;
     }
 

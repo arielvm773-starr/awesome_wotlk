@@ -549,6 +549,20 @@ void name_plates::initialize(hookkit::HookTransaction& tx) {
         .on_change = markDirty
     });
     cvars.add<float>({
+        .name = "nameplateGroupRadius",
+        .init = 0.0f,
+        .min{0.0f},
+        .max{4.0f},
+        .on_change = markDirty
+    });
+    cvars.add<int>({
+        .name = "nameplateGroupMin",
+        .init = 3,
+        .min{2},
+        .max{20},
+        .on_change = markDirty
+    });
+    cvars.add<float>({
         .name = "nameplateOcclusionAlpha",
         .init = 1.0f,
         .min{-1.0f},

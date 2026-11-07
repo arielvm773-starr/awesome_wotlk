@@ -100,6 +100,8 @@ struct Settings {
     const float& raise_distance;
     const float& pull_distance;
     const int& wrap_columns;
+    const float& group_radius;
+    const int& group_min;
     const float& occlusion_alpha;
     const int& occlusion_mode;
     const float& non_target_alpha;
@@ -197,6 +199,8 @@ struct Settings {
             .raise_distance = cvars.ref<float>("nameplateRaiseDistance"),
             .pull_distance = cvars.ref<float>("nameplatePullDistance"),
             .wrap_columns = cvars.ref<int>("nameplateWrapColumns"),
+            .group_radius = cvars.ref<float>("nameplateGroupRadius"),
+            .group_min = cvars.ref<int>("nameplateGroupMin"),
             .occlusion_alpha = cvars.ref<float>("nameplateOcclusionAlpha"),
             .occlusion_mode = cvars.ref<int>("nameplateOcclusionMode"),
             .non_target_alpha = cvars.ref<float>("nameplateNonTargetAlpha"),
