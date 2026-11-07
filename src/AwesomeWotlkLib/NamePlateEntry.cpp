@@ -80,7 +80,9 @@ void Entry::updVis(const MotionParams& p) {
     } else {
         target_offset = Rectf{0.0f, -max.x, max.y, max.x}.clamp(target_offset);
     }
-    const Vec2f goal = p.wrap ? wrapOffset(target_offset, max.y, p.band) : target_offset;
+    // the pile never grows past the top of the screen: the vertical cap is also limited by the room left above the anchor
+    const float room_y = std::max(0.0f, math::aspectNormal().y - p.ceil.y - ptr->ndc_proj_.y - size().y);
+    const Vec2f goal = p.wrap ? wrapOffset(target_offset, std::min(max.y, room_y), p.band) : target_offset;
     if (hasState(State::eIsResync)) {
         setState(State::eIsResync, false);
         momentum = Vec2f{};
